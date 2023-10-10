@@ -153,7 +153,7 @@ QPH = QH * H
 
 # Setup the video encoder
 quilt = Image.new("RGB", size=(QPW, QPH))
-name = f"{args.name}_qs{QW}x{QH}a{AR:.3f}.mp4"
+name = f"quilts/{args.name}_qs{QW}x{QH}a{AR:.3f}.mp4"
 fourcc = cv2.VideoWriter_fourcc("m", "p", "4", "v")
 writer = cv2.VideoWriter(name, fourcc, args.fps, (QPW, QPH))
 
