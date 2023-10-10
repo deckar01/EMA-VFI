@@ -91,29 +91,33 @@ for x, T in zip(angles, mesh):
 batch1_size = sum(len(b[2]) for b in batch1)
 
 
-def img_to_gpu(img):
-    tensor = torch.tensor(img.transpose(2, 0, 1)).cuda()
+def load(file, pad=True):
+    img = cv2.imread(file)
+    mat = img.transpose(2, 0, 1)
+    tensor = torch.tensor(mat).cuda()
     tensor = (tensor / 255.0).unsqueeze(0)
+    if pad:
+        tensor = padder.pad(tensor)[0]
     return tensor
 
+def unload(tensor):
+    tensor = padder.unpad(tensor).detach().cpu()
+    mat = tensor.numpy()
+    mat = (mat.transpose(1, 2, 0) * 255.0).astype(np.uint8)
+    img = Image.fromarray(mat, "RGB")
+    return img
 
-padder = InputPadder(img_to_gpu(cv2.imread(names[0])).shape, divisor=32)
+proto = load(names[0], pad=False)
+padder = InputPadder(proto.shape, divisor=32)
 
 # Interpolate the frame rate
 sparse = {x: [] for x in angles}
 pbar1 = tqdm(desc="Interpolating time", total=batch1_size)
-for img0, img1, D, x in batch1:
-    x0 = padder.pad(img_to_gpu(cv2.imread(img0)))[0]
-    x1 = padder.pad(img_to_gpu(cv2.imread(img1)))[0]
-
+for a, b, D, x in batch1:
     with torch.no_grad():
-        preds = model.multi_inference(x0, x1, TTA, 1, D, TTA)
-
-    for pred in preds:
-        tensor = padder.unpad(pred).detach().cpu()
-        mat = tensor.numpy()
-        image = (mat.transpose(1, 2, 0) * 255.0).astype(np.uint8)
-        sparse[x].append(image)
+        for pred in model.multi_inference(load(a), load(b), TTA, 1, D, TTA):
+            # TODO: Avoid keeping the full grid in memory. (Inline batch 2 here)
+            sparse[x].append(pred.unsqueeze(0))
 
     pbar1.update(len(D))
 
@@ -160,28 +164,18 @@ writer = cv2.VideoWriter(name, fourcc, args.fps, (QPW, QPH))
 # Interpolate the camera angles
 x = 0
 pbar2 = tqdm(desc="Interpolating space", total=batch2_size)
-for img0, img1, D in batch2:
-    x0 = padder.pad(img_to_gpu(img0))[0]
-    x1 = padder.pad(img_to_gpu(img1))[0]
-
+for a, b, D in batch2:
     with torch.no_grad():
-        preds = model.multi_inference(x0, x1, TTA, 1, D, TTA)
+        for pred in model.multi_inference(a, b, TTA, 1, D, TTA):
+            # Paste interpolated frames into the quilt
+            px = (QW - 1 - x % QW) * W
+            py = (x // QW) * H
+            quilt.paste(unload(pred), box=(px, py))
 
-    for pred in preds:
-        tensor = padder.unpad(pred).detach().cpu()
-        mat = tensor.numpy()
-        image = (mat.transpose(1, 2, 0) * 255.0).astype(np.uint8)
-        frame = Image.fromarray(image, "RGB")
-
-        # Paste interpolated frames into the quilt
-        px = (QW - 1 - x % QW) * W
-        py = (x // QW) * H
-        quilt.paste(frame, box=(px, py))
-
-        # Flush completed quilts to disk
-        x = (x + 1) % args.dim
-        if x == 0:
-            writer.write(np.array(quilt))
+            # Flush completed quilts to disk
+            x = (x + 1) % args.dim
+            if x == 0:
+                writer.write(np.array(quilt))
 
     pbar2.update(len(D))
 
