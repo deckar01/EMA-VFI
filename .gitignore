@@ -1,7 +1,7 @@
 .venv/
 __pycache__/
-mesh/
 
 *.pkl
 *.mp4
-*.gif
+*.jpg
+*.png

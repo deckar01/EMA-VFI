@@ -1,9 +1,9 @@
 """
 Bilinear time-then-space interpolation for jittery, sparse camera arrays.
 
-Image names must use the "{angle:int}-{time:float}.{ext}" name format.
-Ascending angles must be right-to-left unless --reverse.
-Cameras must be uniformly spaced. (TODO: Allow non-linear angles in batch2)
+* Naming: {angle:int}-{time:float}.{ext}
+* Order: Ascending right-to-left or --reverse
+* Spacing: Adjacent transformations are assumed to be uniform
 """
 from glob import glob
 import math
@@ -15,9 +15,9 @@ import argparse
 from tqdm import tqdm
 from PIL import Image
 
-import config as cfg
-from Trainer import Model
-from benchmark.utils.padder import InputPadder
+from ema_vfi import config
+from ema_vfi.trainer import Model
+from ema_vfi.padder import InputPadder
 
 show_defaults = argparse.ArgumentDefaultsHelpFormatter
 pre_wrap = argparse.RawTextHelpFormatter
@@ -40,14 +40,14 @@ args = parser.parse_args()
 assert args.model in ["ours_t", "ours_small_t"], "Model not exists!"
 
 # Model setting
-TTA = True
+config.MODEL_CONFIG["LOGNAME"] = args.model
 if args.model == "ours_small_t":
     TTA = False
-    cfg.MODEL_CONFIG["LOGNAME"] = "ours_small_t"
-    cfg.MODEL_CONFIG["MODEL_ARCH"] = cfg.init_model_config(F=16, depth=[2, 2, 2, 2, 2])
+    arch = config.init_model_config(F=16, depth=[2, 2, 2, 2, 2])
 else:
-    cfg.MODEL_CONFIG["LOGNAME"] = "ours_t"
-    cfg.MODEL_CONFIG["MODEL_ARCH"] = cfg.init_model_config(F=32, depth=[2, 2, 2, 4, 4])
+    TTA = True
+    arch = config.init_model_config(F=32, depth=[2, 2, 2, 4, 4])
+config.MODEL_CONFIG["MODEL_ARCH"] = arch
 
 model = Model(-1)
 model.load_model()
@@ -101,21 +101,23 @@ padder = InputPadder(img_to_gpu(cv2.imread(names[0])).shape, divisor=32)
 
 # Interpolate the frame rate
 sparse = {x: [] for x in angles}
-with tqdm(desc="Interpolating time", total=batch1_size) as pbar:
-    for img0, img1, D, x in batch1:
-        x0 = padder.pad(img_to_gpu(cv2.imread(img0)))[0]
-        x1 = padder.pad(img_to_gpu(cv2.imread(img1)))[0]
+pbar1 = tqdm(desc="Interpolating time", total=batch1_size)
+for img0, img1, D, x in batch1:
+    x0 = padder.pad(img_to_gpu(cv2.imread(img0)))[0]
+    x1 = padder.pad(img_to_gpu(cv2.imread(img1)))[0]
 
-        with torch.no_grad():
-            preds: list[torch.Tensor] = model.multi_inference(x0, x1, time_list=D)
+    with torch.no_grad():
+        preds = model.multi_inference(x0, x1, TTA, 1, D, TTA)
 
-        for pred in preds:
-            tensor = padder.unpad(pred).detach().cpu()
-            mat = tensor.numpy()
-            image = (mat.transpose(1, 2, 0) * 255.0).astype(np.uint8)
-            sparse[x].append(image)
+    for pred in preds:
+        tensor = padder.unpad(pred).detach().cpu()
+        mat = tensor.numpy()
+        image = (mat.transpose(1, 2, 0) * 255.0).astype(np.uint8)
+        sparse[x].append(image)
 
-        pbar.update(len(D))
+    pbar1.update(len(D))
+
+pbar1.close()
 
 # Calculate the interpolations for the desired quilt size
 batch2 = []
@@ -157,30 +159,31 @@ writer = cv2.VideoWriter(name, fourcc, args.fps, (QPW, QPH))
 
 # Interpolate the camera angles
 x = 0
-with tqdm(desc="Interpolating space", total=batch2_size) as pbar:
-    for img0, img1, D in batch2:
-        x0 = padder.pad(img_to_gpu(img0))[0]
-        x1 = padder.pad(img_to_gpu(img1))[0]
+pbar2 = tqdm(desc="Interpolating space", total=batch2_size)
+for img0, img1, D in batch2:
+    x0 = padder.pad(img_to_gpu(img0))[0]
+    x1 = padder.pad(img_to_gpu(img1))[0]
 
-        with torch.no_grad():
-            preds: list[torch.Tensor] = model.multi_inference(x0, x1, time_list=D)
+    with torch.no_grad():
+        preds = model.multi_inference(x0, x1, TTA, 1, D, TTA)
 
-        for pred in preds:
-            tensor = padder.unpad(pred).detach().cpu()
-            mat = tensor.numpy()
-            image = (mat.transpose(1, 2, 0) * 255.0).astype(np.uint8)
-            frame = Image.fromarray(image, "RGB")
+    for pred in preds:
+        tensor = padder.unpad(pred).detach().cpu()
+        mat = tensor.numpy()
+        image = (mat.transpose(1, 2, 0) * 255.0).astype(np.uint8)
+        frame = Image.fromarray(image, "RGB")
 
-            # Paste interpolated frames into the quilt
-            px = (QW - 1 - x % QW) * W
-            py = (x // QW) * H
-            quilt.paste(frame, box=(px, py))
+        # Paste interpolated frames into the quilt
+        px = (QW - 1 - x % QW) * W
+        py = (x // QW) * H
+        quilt.paste(frame, box=(px, py))
 
-            # Flush completed quilts to disk
-            x = (x + 1) % args.dim
-            if x == 0:
-                writer.write(np.array(quilt))
+        # Flush completed quilts to disk
+        x = (x + 1) % args.dim
+        if x == 0:
+            writer.write(np.array(quilt))
 
-        pbar.update(len(D))
+    pbar2.update(len(D))
 
+pbar2.close()
 writer.release()

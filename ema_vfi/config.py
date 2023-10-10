@@ -1,8 +1,8 @@
 from functools import partial
 import torch.nn as nn
 
-from model import feature_extractor
-from model import flow_estimation
+from .model import feature_extractor
+from .model import flow_estimation
 
 '''==========Model config=========='''
 def init_model_config(F=32, W=7, depth=[2, 2, 2, 4, 4]):
