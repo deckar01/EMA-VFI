@@ -1,0 +1,7 @@
+black
+mypy
+types-Pillow
+types-colorama
+types-setuptools
+types-tabulate
+types-tqdm
