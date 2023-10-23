@@ -1,0 +1,11 @@
+[tool.mypy]
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = [
+    "timm",
+    "timm.models.layers",
+    "torchvision",
+    "torchvision.io",
+]
+ignore_missing_imports = true
