@@ -53,35 +53,37 @@ torch.set_grad_enabled(False)
 
 
 class Blender:
-    A: torch.Tensor
-    B: torch.Tensor
+    start: torch.Tensor
+    end: torch.Tensor
 
     @staticmethod
     def padder(proto: str) -> InputPadder:
         return InputPadder(Blender._read(proto).shape, divisor=32)
-    
+
     @staticmethod
-    def _read(n: str) -> torch.Tensor:
-        tensor = torchvision.io.read_image(n).cuda()
+    def _read(file: str) -> torch.Tensor:
+        tensor = torchvision.io.read_image(file)
         return (tensor / 255.0).unsqueeze(0)
 
     @staticmethod
-    def read(a: str, b:str, padder: InputPadder) -> "Blender":
-        A, = padder.pad(Blender._read(a))
-        B, = padder.pad(Blender._read(b))
-        return Blender(A, B)
+    def read(file: str, padder: InputPadder) -> torch.Tensor:
+        return padder.pad(Blender._read(file))[0]
 
     @staticmethod
     def dump(tensor: torch.Tensor, padder: InputPadder) -> PIL.Image.Image:
         tensor = padder.unpad(tensor).squeeze(0).cpu()
         mat = (tensor.numpy().transpose(1, 2, 0) * 255.0).astype(numpy.uint8)
-        return PIL.Image.fromarray(mat[:,:,::-1], "RGB")
+        return PIL.Image.fromarray(mat[:, :, ::-1], "RGB")
 
-    def __init__(self, A: torch.Tensor, B: torch.Tensor):
-        self.A = A
-        self.B = B
-        self.af, self.mf = net.feature_bone(A, B)
+    def __init__(self, start: torch.Tensor, end: torch.Tensor):
+        self.start = start
+        self.end = end
+        self.appearence, self.motion = net.feature_bone(start, end)
 
-    def sample(self, t: float) -> torch.Tensor:
-        flow, mask = net.calculate_flow(self.A, self.B, t, self.af, self.mf)
-        return net.coraseWarp_and_Refine(self.A, self.B, self.af, flow, mask)
+    def sample(self, at: float) -> torch.Tensor:
+        flow, mask = net.calculate_flow(
+            self.start, self.end, at, self.appearence, self.motion
+        )
+        return net.coraseWarp_and_Refine(
+            self.start, self.end, self.appearence, flow, mask
+        )

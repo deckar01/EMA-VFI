@@ -1,12 +1,13 @@
 from glob import glob
+from queue import Queue
 import os
 
-import cv2
-import numpy as np
-from tqdm import tqdm
+from torch import Tensor
+from torch.multiprocessing import Manager, Process
 
 from .cli import args
-from .core import BilinearTimeSpace, Vertex, Space, Time
+from .core import Compute, Prefetch, Vertex, Space, Time
+from .model import Blender
 from .quilt import Quilt
 
 
@@ -17,20 +18,25 @@ points = [
     if (parts := os.path.basename(name).split("-"))
 ]
 
-mesh = BilinearTimeSpace(args.dim, args.fps, points)
+manager = Manager()
+istream: Queue[Tensor] = manager.Queue()
+ostream: Queue[Tensor] = manager.Queue()
 
-quilt = Quilt(mesh.padder.wd, mesh.padder.ht, args.qw, args.dim)
-name = f"quilts/{args.name}{quilt.suffix}.mp4"
-fourcc = cv2.VideoWriter.fourcc(*"mp4v")
-video = cv2.VideoWriter(name, fourcc, args.fps, quilt.size)
+padder = Blender.padder(points[0].file)
 
-try:
-    progress = tqdm(desc="Interpolating", total=mesh.t_steps, unit="quilt", smoothing=0)
-    frames = mesh.interpolate()
-    for i, frame in enumerate(frames):
-        quilt.add(i, frame)
-        if (i + 1) % args.dim == 0:
-            video.write(np.array(quilt.image))
-            progress.update()
-finally:
-    video.release()
+prefetch = Prefetch(args.dim, args.fps, points)
+prefetch_process = Process(target=prefetch.fill, args=(istream, padder))
+
+compute = Compute(args.dim, args.fps, points)
+
+quilt = Quilt(padder, args.qw, args.dim)
+quilt_args = (ostream, compute.t_steps, args.fps, args.name)
+quilt_process = Process(target=quilt.dump, args=quilt_args)
+
+prefetch_process.start()
+quilt_process.start()
+
+compute.run(istream, ostream)
+
+prefetch_process.join()
+quilt_process.join()

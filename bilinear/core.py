@@ -1,25 +1,21 @@
 from bisect import insort
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Generator
+from queue import Queue
 
-from PIL.Image import Image
+from torch import Tensor
 
-from .model import Blender
+from .model import Blender, InputPadder
 
 Space = float
 Time = float
-ImageName = str
 
 
 @dataclass(order=True, frozen=True)
 class Vertex:
     x: Space
     t: Time
-    f: ImageName
-
-    def __repr__(self):
-        return f"(x:{self.x:.2f}, t:{self.t:.2f})"
+    file: str
 
 
 class BilinearTimeSpace:
@@ -27,35 +23,34 @@ class BilinearTimeSpace:
         self.n = n
         self.fps = fps
         self.points = points
-        self.padder = Blender.padder(points[0].f)
 
         # Partition the points into timelines
-        self.TL: defaultdict[Space, list[Vertex]] = defaultdict(list)
+        self.timelines: defaultdict[Space, list[Vertex]] = defaultdict(list)
         for v in self.points:
-            insort(self.TL[v.x], v)
+            insort(self.timelines[v.x], v)
 
         # Find the time range covered by all timelines
-        self.t0 = max(T[0].t for T in self.TL.values())
-        self.t1 = min(T[-1].t for T in self.TL.values())
+        self.t0 = max(T[0].t for T in self.timelines.values())
+        self.t1 = min(T[-1].t for T in self.timelines.values())
         self.t_steps = int((self.t1 - self.t0) * self.fps) + 1
 
         # Calculate the space range
-        self.X = list(sorted(self.TL.keys()))
+        self.X = list(sorted(self.timelines.keys()))
         self.x0 = self.X[0]
         self.x1 = self.X[-1]
         self.x_steps = self.n
 
-    def interpolate(self) -> Generator[Image, None, None]:
-        # Cache the model bones for each timeline
-        Tm: list[Blender | None] = [None] * len(self.X)
+    def walk(self) -> None:
+        # Cache the window for each timeline
+        time_windows: list[bool] = [False] * len(self.X)
 
         # Interpolate the frame rate
         i = [1] * len(self.X)
         for t_step in range(self.t_steps):
             t = self.t0 + t_step / self.fps
 
-            # Cache the model bone for the current space walk
-            Xm: Blender | None = None
+            # Cache the window for the current space walk
+            space_window: bool = False
 
             # Interpolate the camera spacing
             j = 0
@@ -67,41 +62,97 @@ class BilinearTimeSpace:
                 while self.X[k] < x:
                     j += 1
                     k += 1
-                    Xm = None
+                    space_window = False
 
-                L = self.X[j]
-                R = self.X[k]
-                Xr = (x - L) / (R - L)
+                ABx = self.X[j]
+                CDx = self.X[k]
+                EFd = (x - ABx) / (CDx - ABx)
 
                 # Advance the left time window
-                while self.TL[L][i[j]].t < t:
+                while self.timelines[ABx][i[j]].t < t:
                     i[j] += 1
-                    Tm[j] = None
-                    Xm = None
+                    time_windows[j] = False
+                    space_window = False
 
-                La = self.TL[L][i[j] - 1]
-                Lb = self.TL[L][i[j]]
-                Lr = (t - La.t) / (Lb.t - La.t)
+                A = self.timelines[ABx][i[j] - 1]
+                B = self.timelines[ABx][i[j]]
+                ABt = (t - A.t) / (B.t - A.t)
+
+                # Cache the left time window
+                if not time_windows[j]:
+                    self.step_time(j, A, B)
+                    time_windows[j] = True
 
                 # Advance the right time window
-                while self.TL[R][i[k]].t < t:
+                while self.timelines[CDx][i[k]].t < t:
                     i[k] += 1
-                    Tm[k] = None
-                    Xm = None
+                    time_windows[k] = False
+                    space_window = False
 
-                Ra = self.TL[R][i[k] - 1]
-                Rb = self.TL[R][i[k]]
-                Rr = (t - Ra.t) / (Rb.t - Ra.t)
+                C = self.timelines[CDx][i[k] - 1]
+                D = self.timelines[CDx][i[k]]
+                CDt = (t - C.t) / (D.t - C.t)
 
-                # Blend new windows into the cache
-                if Tm[j] is None:
-                    Tm[j] = Blender.read(La.f, Lb.f, self.padder)
+                # Cache the right time window
+                if not time_windows[k]:
+                    self.step_time(k, C, D)
+                    time_windows[k] = True
 
-                if Tm[k] is None:
-                    Tm[k] = Blender.read(Ra.f, Rb.f, self.padder)
+                # Cache the space window
+                if not space_window:
+                    self.step_space(j, ABt, k, CDt)
+                    space_window = True
 
-                if Xm is None:
-                    Xm = Blender(Tm[j].sample(Lr), Tm[k].sample(Rr))  # type: ignore[union-attr]
+                # Interpolate the space-time point
+                self.sample(EFd)
 
-                # Interpolate the current space-time point
-                yield Blender.dump(Xm.sample(Xr), self.padder)
+    def step_time(self, i: int, start: Vertex, end: Vertex) -> None:
+        pass
+
+    def step_space(self, j: int, ABt: float, k: int, CDt: float) -> None:
+        pass
+
+    def sample(self, EFd: float) -> None:
+        pass
+
+
+class Compute(BilinearTimeSpace):
+    def run(self, istream: Queue[Tensor], ostream: Queue[Tensor]) -> None:
+        self.istream = istream
+        self.ostream = ostream
+
+        self.time_windows: dict[int, Blender] = {}
+        self.space_windows: dict[int, Blender] = {}
+
+        super().walk()
+
+        ostream.put(Tensor())
+
+    def step_time(self, i: int, start: Vertex, end: Vertex) -> None:
+        """Cache a time blend"""
+        start_vertex = self.istream.get().cuda()
+        end_vertex = self.istream.get().cuda()
+        self.time_windows[i] = Blender(start_vertex, end_vertex)
+
+    def step_space(self, j: int, ABt: float, k: int, CDt: float) -> None:
+        """Cache a space blend"""
+        AB = self.time_windows[j]
+        CD = self.time_windows[k]
+        self.space_windows[0] = Blender(AB.sample(ABt), CD.sample(CDt))
+
+    def sample(self, EFd: float) -> None:
+        """Sample the space blend"""
+        EF = self.space_windows[0]
+        self.ostream.put(EF.sample(EFd).cpu())
+
+
+class Prefetch(BilinearTimeSpace):
+    def fill(self, istream: Queue[Tensor], padder: InputPadder) -> None:
+        self.istream = istream
+        self.padder = padder
+        super().walk()
+
+    def step_time(self, i: int, start: Vertex, end: Vertex) -> None:
+        """Prepare a time window for blending"""
+        self.istream.put(Blender.read(start.file, self.padder).cpu())
+        self.istream.put(Blender.read(end.file, self.padder).cpu())

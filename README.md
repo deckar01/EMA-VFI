@@ -29,7 +29,21 @@ v            D
 
 ## Performance
 
-Inference calls within shared edges are optimized by caching feature extraction "bones" between image pairs. Frames are produced in the order needed for streaming to a video encoder. Cached VRAM "bones" are freed as soon the interpolation edge is no longer part of the window containing the current frame. The VRAM buffer used on top of the pytorch model is approximately `|image + features| * (2 * n + 3)`, where `n` is the number of timelines (input cameras).
+### Compute
+
+Inference calls within shared edges are optimized by caching and reusing "feature bones" between image pairs.
+
+### VRAM
+
+When the four points bounding the sample point change, the corresponding memory is freed. The buffer used on top of the pytorch model is approximately `|image + features| * (2 * n + 3)`, where `n` is the number of timelines (input cameras).
+
+### RAM
+
+Frames are produced in the order needed for streaming hologram quilts to a video encoder.
+
+### IO
+
+File and en/decoding IO run in parallel with inference using pytorch multiprocessing. Data is pipelines through CPU tensor queues.
 
 ## Dependencies
 
