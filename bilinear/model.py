@@ -4,6 +4,7 @@ import numpy
 import torch
 import torchvision.io
 
+from ema_vfi.model.device import device
 from ema_vfi.model.flow_estimation import MultiScaleFlow
 from ema_vfi.model.feature_extractor import MotionFormer
 from ema_vfi.padder import InputPadder
@@ -48,7 +49,7 @@ net.load_state_dict(
 )
 
 net.eval()
-net.to(torch.device("cuda"), non_blocking=True)
+net.to(device, non_blocking=True)
 torch.set_grad_enabled(False)
 
 

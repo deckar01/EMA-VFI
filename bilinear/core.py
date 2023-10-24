@@ -5,6 +5,7 @@ from queue import Queue
 
 from torch import Tensor
 
+from ema_vfi.model.device import device
 from .model import Blender, InputPadder
 
 Space = float
@@ -130,8 +131,8 @@ class Compute(BilinearTimeSpace):
 
     def step_time(self, i: int, start: Vertex, end: Vertex) -> None:
         """Cache a time blend"""
-        start_vertex = self.istream.get().cuda()
-        end_vertex = self.istream.get().cuda()
+        start_vertex = self.istream.get().to(device)
+        end_vertex = self.istream.get().to(device)
         self.time_windows[i] = Blender(start_vertex, end_vertex)
 
     def step_space(self, j: int, ABt: float, k: int, CDt: float) -> None:

@@ -3,6 +3,8 @@ import torch.nn as nn
 import math
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
+from .device import device
+
 
 def window_partition(x, window_size):
     B, H, W, C = x.shape
@@ -269,7 +271,7 @@ class MotionFormerBlock(nn.Module):
             if hasattr(self, "HW") and self.HW.item() == H_p * W_p:
                 shift_mask = self.attn_mask
             else:
-                shift_mask = torch.zeros((1, H_p, W_p, 1))  # 1 H W 1
+                shift_mask = torch.zeros((1, H_p, W_p, 1), device=device)  # 1 H W 1
                 h_slices = (
                     slice(0, -self.window_size[0]),
                     slice(-self.window_size[0], -self.shift_size[0]),

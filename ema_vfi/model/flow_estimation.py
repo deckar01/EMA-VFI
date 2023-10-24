@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from .warplayer import warp
 from .refine import conv, Unet
+from .device import device
 
 
 class Head(nn.Module):
@@ -83,12 +84,21 @@ class MultiScaleFlow(nn.Module):
             )
         return y0, y1
 
-    def calculate_flow(self, img0, img1, timestep, af=None, mf=None):
+    def calculate_flow(
+        self,
+        img0: torch.Tensor,
+        img1: torch.Tensor,
+        timestep: float,
+        af: torch.Tensor,
+        mf: torch.Tensor,
+    ):
         B = img0.size(0)
         flow, mask = None, None
         for i in range(self.flow_num_stage):
-            t = torch.full(mf[-1 - i][:B].shape, timestep, dtype=torch.float).cuda()
-            if flow != None:
+            t = torch.full(
+                mf[-1 - i][:B].shape, timestep, dtype=torch.float, device=device
+            )
+            if flow is not None:
                 warped_img0 = warp(img0, flow[:, :2])
                 warped_img1 = warp(img1, flow[:, 2:4])
                 flow_, mask_ = self.block[i](
