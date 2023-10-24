@@ -37,13 +37,10 @@ class Head(nn.Module):
                 )
             x = torch.cat((x, flow), 1)
         x = self.conv(torch.cat([motion_feature, x], 1))
-        if self.scale != 4:
-            x = F.interpolate(
-                x, scale_factor=self.scale // 4, mode="bilinear", align_corners=False
-            )
-            flow = x[:, :4] * (self.scale // 4)
-        else:
-            flow = x[:, :4]
+        x = F.interpolate(
+            x, scale_factor=self.scale // 4, mode="bilinear", align_corners=False
+        )
+        flow = x[:, :4] * (self.scale // 4)
         mask = x[:, 4:5]
         return flow, mask
 
@@ -89,9 +86,6 @@ class MultiScaleFlow(nn.Module):
     def calculate_flow(self, img0, img1, timestep, af=None, mf=None):
         B = img0.size(0)
         flow, mask = None, None
-        # appearence_features & motion_features
-        if (af is None) or (mf is None):
-            af, mf = self.feature_bone(img0, img1)
         for i in range(self.flow_num_stage):
             t = torch.full(mf[-1 - i][:B].shape, timestep, dtype=torch.float).cuda()
             if flow != None:
@@ -139,51 +133,3 @@ class MultiScaleFlow(nn.Module):
         merged = warped_img0 * mask_ + warped_img1 * (1 - mask_)
         pred = torch.clamp(merged + res, 0, 1)
         return pred
-
-    # Actually consist of 'calculate_flow' and 'coraseWarp_and_Refine'
-    def forward(self, x, timestep=0.5):
-        img0, img1 = x[:, :3], x[:, 3:6]
-        B = x.size(0)
-        flow_list = []
-        merged = []
-        mask_list = []
-        warped_img0 = img0
-        warped_img1 = img1
-        flow = None
-
-        # appearence_features & motion_features
-        af, mf = self.feature_bone(img0, img1)
-
-        extra = ()
-        flow = None
-        mask = None
-        for i, block in enumerate(self.block):
-            t = torch.full(mf[-1 - i][:B].shape, timestep, dtype=torch.float).cuda()
-            flow_d, mask_d = block(
-                torch.cat(
-                    [
-                        t * mf[-1 - i][:B],
-                        (1 - timestep) * mf[-1 - i][B:],
-                        af[-1 - i][:B],
-                        af[-1 - i][B:],
-                    ],
-                    1,
-                ),
-                torch.cat((img0, img1, *extra), 1),
-                flow,
-            )
-            flow = flow + flow_d if flow else flow_d
-            mask = mask + mask_d if mask else mask_d
-
-            mask_list.append(torch.sigmoid(mask))
-            flow_list.append(flow)
-            warped_img0 = warp(img0, flow[:, :2])
-            warped_img1 = warp(img1, flow[:, 2:4])
-            merged.append(warped_img0 * mask_list[i] + warped_img1 * (1 - mask_list[i]))
-            extra = (warped_img0, warped_img1, mask)
-
-        c0, c1 = self.warp_features(af, flow)
-        tmp = self.unet(img0, img1, warped_img0, warped_img1, mask, flow, c0, c1)
-        res = tmp[:, :3] * 2 - 1
-        pred = torch.clamp(merged[-1] + res, 0, 1)
-        return flow_list, mask_list, merged, pred

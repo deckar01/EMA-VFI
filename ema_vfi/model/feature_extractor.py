@@ -32,51 +32,47 @@ def pad_if_needed(x, size, window_size):
     n, h, w, c = size
     pad_h = math.ceil(h / window_size[0]) * window_size[0] - h
     pad_w = math.ceil(w / window_size[1]) * window_size[1] - w
-    if pad_h > 0 or pad_w > 0:  # center-pad the feature on H and W axes
-        img_mask = torch.zeros((1, h + pad_h, w + pad_w, 1))  # 1 H W 1
-        h_slices = (
-            slice(0, pad_h // 2),
-            slice(pad_h // 2, h + pad_h // 2),
-            slice(h + pad_h // 2, None),
-        )
-        w_slices = (
-            slice(0, pad_w // 2),
-            slice(pad_w // 2, w + pad_w // 2),
-            slice(w + pad_w // 2, None),
-        )
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
+    img_mask = torch.zeros((1, h + pad_h, w + pad_w, 1), device=device)  # 1 H W 1
+    h_slices = (
+        slice(0, pad_h // 2),
+        slice(pad_h // 2, h + pad_h // 2),
+        slice(h + pad_h // 2, None),
+    )
+    w_slices = (
+        slice(0, pad_w // 2),
+        slice(pad_w // 2, w + pad_w // 2),
+        slice(w + pad_w // 2, None),
+    )
+    cnt = 0
+    for h in h_slices:
+        for w in w_slices:
+            img_mask[:, h, w, :] = cnt
+            cnt += 1
 
-        mask_windows = window_partition(
-            img_mask, window_size
-        )  # nW, window_size*window_size, 1
-        mask_windows = mask_windows.squeeze(-1)
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
-        return (
-            nn.functional.pad(
-                x,
-                (0, 0, pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2),
-            ),
-            attn_mask,
-        )
-    return x, None
+    mask_windows = window_partition(
+        img_mask, window_size
+    )  # nW, window_size*window_size, 1
+    mask_windows = mask_windows.squeeze(-1)
+    attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+    attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
+        attn_mask == 0, float(0.0)
+    )
+    return (
+        nn.functional.pad(
+            x,
+            (0, 0, pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2),
+        ),
+        attn_mask,
+    )
 
 
 def depad_if_needed(x, size, window_size):
     n, h, w, c = size
     pad_h = math.ceil(h / window_size[0]) * window_size[0] - h
     pad_w = math.ceil(w / window_size[1]) * window_size[1] - w
-    if pad_h > 0 or pad_w > 0:  # remove the center-padding on feature
-        return x[
-            :, pad_h // 2 : pad_h // 2 + h, pad_w // 2 : pad_w // 2 + w, :
-        ].contiguous()
-    return x
+    return x[
+        :, pad_h // 2 : pad_h // 2 + h, pad_w // 2 : pad_w // 2 + w, :
+    ].contiguous()
 
 
 class Mlp(nn.Module):
@@ -104,9 +100,6 @@ class Mlp(nn.Module):
             trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
             fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
             fan_out //= m.groups
@@ -158,17 +151,8 @@ class InterFrameAttention(nn.Module):
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
             if m.bias is not None:
-                m.bias.data.zero_()
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x1, x2, cor, H, W, mask=None):
         B, N, C = x1.shape
@@ -190,15 +174,12 @@ class InterFrameAttention(nn.Module):
         k, v = kv[0], kv[1]
         attn = (q @ k.transpose(-2, -1)) * self.scale
 
-        if mask is not None:
-            nW = mask.shape[0]  # mask: nW, N, N
-            attn = attn.view(B // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N)
-            attn = attn.softmax(dim=-1)
-        else:
-            attn = attn.softmax(dim=-1)
+        nW = mask.shape[0]  # mask: nW, N, N
+        attn = attn.view(B // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
+            1
+        ).unsqueeze(0)
+        attn = attn.view(-1, self.num_heads, N, N)
+        attn = attn.softmax(dim=-1)
 
         attn = self.attn_drop(attn)
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
@@ -373,14 +354,6 @@ class ConvBlock(nn.Module):
             )
         self.conv = nn.Sequential(*layers)
 
-    def _init_weights(self, m):
-        if isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
-
     def forward(self, x):
         x = self.conv(x)
         return x
@@ -404,11 +377,7 @@ class OverlapPatchEmbed(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=0.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
+        if isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
@@ -445,11 +414,7 @@ class CrossScalePatchEmbed(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=0.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
+        if isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
@@ -640,8 +605,3 @@ class DWConv(nn.Module):
         x = x.reshape(B, C, -1).transpose(1, 2)
 
         return x
-
-
-def feature_extractor(**kargs):
-    model = MotionFormer(**kargs)
-    return model
