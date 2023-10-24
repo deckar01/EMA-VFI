@@ -19,7 +19,7 @@ points = [
 ]
 
 manager = Manager()
-istream: Queue[Tensor] = manager.Queue()
+istream: Queue[Tensor] = manager.Queue(8)
 ostream: Queue[Tensor] = manager.Queue()
 
 padder = Blender.padder(points[0].file)

@@ -4,8 +4,8 @@ Bilinear time-then-space interpolation for jittery, sparse camera arrays.
 
 ## Strategy
 
-1. Model the video frames from a sparse camera array as set of parallel timelines.
-2. Interpolate the frame rate of each timelines.
+1. Model the video frames from a sparse camera array as a set of parallel timelines.
+2. Interpolate the frame rate of each timeline.
 3. Interpolate the camera angles between timelines.
 
 ```
@@ -31,19 +31,19 @@ v            D
 
 ### Compute
 
-Inference calls within shared edges are optimized by caching and reusing "feature bones" between image pairs.
+Inference calls within shared edges are optimized by caching and reusing motion features between image pairs.
 
 ### VRAM
 
 When the four points bounding the sample point change, the corresponding memory is freed. The buffer used on top of the pytorch model is approximately `|image + features| * (2 * n + 3)`, where `n` is the number of timelines (input cameras).
 
-### RAM
-
-Frames are produced in the order needed for streaming hologram quilts to a video encoder.
-
 ### IO
 
-File and en/decoding IO run in parallel with inference using pytorch multiprocessing. Data is pipelines through CPU tensor queues.
+Image decoding and video encoding run in separate processes parallel to inference using pytorch multiprocessing. Data is pipelined through CPU tensor queues.
+
+### RAM
+
+Frames are produced in the order needed for streaming hologram quilts to a video encoder. The input queue is limited to 8 images, which prevents IO from blocking compute without unnecissary back pressure.
 
 ## Dependencies
 

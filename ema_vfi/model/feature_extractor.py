@@ -1,6 +1,7 @@
+import math
+
 import torch
 import torch.nn as nn
-import math
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
 from .device import device
